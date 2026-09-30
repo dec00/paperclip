@@ -160,6 +160,7 @@ export function prepareBundledPackage(sourceDir, destinationDir, { sourceRoot = 
         stdio: "inherit",
       });
     }
+    if (!existsSync(sourceEntry) && entry === "skills") continue;
     cpSync(sourceEntry, resolve(destinationDir, entry), { recursive: true });
   }
   for (const entry of ["README.md", "LICENSE", "LICENSE.md"]) {
