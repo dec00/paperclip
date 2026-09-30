@@ -28,6 +28,7 @@ export function materializePublishManifest(pkg) {
   }
 
   delete publishManifest.publishConfig;
+  delete publishManifest.scripts;
   return publishManifest;
 }
 
