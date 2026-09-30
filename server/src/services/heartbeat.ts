@@ -5782,6 +5782,16 @@ function stableManagedCredentialIdentity(input: {
   ].join(":");
 }
 
+function stableManagedRuntimeIdentity(
+  managedAiRuntime: Awaited<ReturnType<typeof prepareManagedAiRuntime>>,
+): string {
+  return stableManagedCredentialIdentity(managedAiRuntime.attribution);
+}
+
+function readOptionalString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
 /**
  * Normalizes a managed AI connection's effective adapter config for fingerprinting.
  * Replaces per-run temporary home paths and credential generation identity
@@ -5796,16 +5806,26 @@ function normalizeManagedAdapterConfigForFingerprint(
 
   // managedAiConnection contains the attribution fields directly (spread from selection.attribution)
   // plus an identity field. No nested 'attribution' property.
-  const attribution = managed;
+  // Type assertion for the known managed connection structure
+  const attribution = managed as {
+    connectionId?: unknown;
+    grantId?: unknown;
+    provider?: unknown;
+    method?: unknown;
+    mode?: unknown;
+    responsibleUserId?: unknown;
+    identity?: unknown;
+    attribution?: unknown;
+  };
 
   // Build stable identity from connection identity, not credential generation
   const stableIdentity = stableManagedCredentialIdentity({
-    connectionId: attribution.connectionId,
-    grantId: attribution.grantId,
-    provider: attribution.provider,
-    method: attribution.method,
-    mode: attribution.mode,
-    responsibleUserId: attribution.responsibleUserId,
+    connectionId: readOptionalString(attribution.connectionId),
+    grantId: readOptionalString(attribution.grantId),
+    provider: readOptionalString(attribution.provider),
+    method: readOptionalString(attribution.method),
+    mode: readOptionalString(attribution.mode),
+    responsibleUserId: readOptionalString(attribution.responsibleUserId),
   });
 
   const next = { ...config };
@@ -21003,14 +21023,7 @@ export function heartbeatService(
         }
         Object.assign(resolvedConfig, managedAiRuntime.config);
         for (const key of AI_AUTH_ENV_KEYS) secretKeys.add(key);
-        const stableIdentity = stableManagedCredentialIdentity({
-          connectionId: managedAiRuntime.attribution?.connectionId ?? managedAiRuntime.connectionId,
-          grantId: managedAiRuntime.attribution?.grantId ?? managedAiRuntime.grantId,
-          provider: managedAiRuntime.attribution?.provider ?? managedAiRuntime.provider,
-          method: managedAiRuntime.attribution?.method ?? managedAiRuntime.method,
-          mode: managedAiRuntime.attribution?.mode ?? managedAiRuntime.mode,
-          responsibleUserId: managedAiRuntime.attribution?.responsibleUserId ?? managedAiRuntime.responsibleUserId,
-        });
+        const stableIdentity = stableManagedRuntimeIdentity(managedAiRuntime);
         context.aiConnection = { ...managedAiRuntime.attribution, identity: stableIdentity };
         await db.update(heartbeatRuns).set({ contextSnapshot: sql`coalesce(${heartbeatRuns.contextSnapshot}, '{}'::jsonb) || ${JSON.stringify({ aiConnection: context.aiConnection })}::jsonb` }).where(eq(heartbeatRuns.id, run.id));
       }
@@ -22310,14 +22323,7 @@ export function heartbeatService(
 
       if (managedAiRuntime) {
         // Use stable identity for session resume comparison
-        const stableIdentity = stableManagedCredentialIdentity({
-          connectionId: managedAiRuntime.attribution?.connectionId ?? managedAiRuntime.connectionId,
-          grantId: managedAiRuntime.attribution?.grantId ?? managedAiRuntime.grantId,
-          provider: managedAiRuntime.attribution?.provider ?? managedAiRuntime.provider,
-          method: managedAiRuntime.attribution?.method ?? managedAiRuntime.method,
-          mode: managedAiRuntime.attribution?.mode ?? managedAiRuntime.mode,
-          responsibleUserId: managedAiRuntime.attribution?.responsibleUserId ?? managedAiRuntime.responsibleUserId,
-        });
+        const stableIdentity = stableManagedRuntimeIdentity(managedAiRuntime);
         sessionConfigMetadata.aiCredentialIdentity = stableIdentity;
         if (taskSessionDecodedParams?.paperclipAiCredentialIdentity !== stableIdentity) {
           runtimeSessionIdForAdapter = null;
@@ -22829,14 +22835,9 @@ export function heartbeatService(
                     return requests.length > 0 ? requests : undefined;
                   })(),
                 });
-          const stableIdentity = managedAiRuntime ? stableManagedCredentialIdentity({
-          connectionId: managedAiRuntime.attribution?.connectionId ?? managedAiRuntime.connectionId,
-          grantId: managedAiRuntime.attribution?.grantId ?? managedAiRuntime.grantId,
-          provider: managedAiRuntime.attribution?.provider ?? managedAiRuntime.provider,
-          method: managedAiRuntime.attribution?.method ?? managedAiRuntime.method,
-          mode: managedAiRuntime.attribution?.mode ?? managedAiRuntime.mode,
-          responsibleUserId: managedAiRuntime.attribution?.responsibleUserId ?? managedAiRuntime.responsibleUserId,
-        }) : null;
+          const stableIdentity = managedAiRuntime
+            ? stableManagedRuntimeIdentity(managedAiRuntime)
+            : null;
           const taskNativeSessionId = managedAiRuntime && taskSessionDecodedParams?.paperclipAiCredentialIdentity !== stableIdentity ? null : readNonEmptyString(
             taskSessionDecodedParams?.sessionId,
           );
