@@ -148,7 +148,19 @@ export function prepareBundledPackage(sourceDir, destinationDir, { sourceRoot = 
   rmSync(destinationDir, { recursive: true, force: true });
   mkdirSync(destinationDir, { recursive: true });
   for (const entry of sourcePackage.files ?? []) {
-    cpSync(resolve(sourceDir, entry), resolve(destinationDir, entry), { recursive: true });
+    const sourceEntry = resolve(sourceDir, entry);
+    if (
+      !existsSync(sourceEntry) &&
+      entry === "ui-dist" &&
+      sourcePackage.scripts?.["prepare:ui-dist"]
+    ) {
+      execFileSync("pnpm", ["run", "prepare:ui-dist"], {
+        cwd: sourceDir,
+        env: { ...process.env, PAPERCLIP_RELEASE_REUSE_UI_DIST: "1" },
+        stdio: "inherit",
+      });
+    }
+    cpSync(sourceEntry, resolve(destinationDir, entry), { recursive: true });
   }
   for (const entry of ["README.md", "LICENSE", "LICENSE.md"]) {
     const sourcePath = resolve(sourceDir, entry);
