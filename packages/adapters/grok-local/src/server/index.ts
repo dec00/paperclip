@@ -20,12 +20,14 @@ export const sessionCodec: AdapterSessionCodec = {
     const workspaceId = readNonEmptyString(record.workspaceId) ?? readNonEmptyString(record.workspace_id);
     const repoUrl = readNonEmptyString(record.repoUrl) ?? readNonEmptyString(record.repo_url);
     const repoRef = readNonEmptyString(record.repoRef) ?? readNonEmptyString(record.repo_ref);
+    const paperclipAiCredentialIdentity = readNonEmptyString(record.paperclipAiCredentialIdentity);
     return {
       sessionId,
       ...(cwd ? { cwd } : {}),
       ...(workspaceId ? { workspaceId } : {}),
       ...(repoUrl ? { repoUrl } : {}),
       ...(repoRef ? { repoRef } : {}),
+      ...(paperclipAiCredentialIdentity ? { paperclipAiCredentialIdentity } : {}),
     };
   },
   serialize(params: Record<string, unknown> | null) {
@@ -42,12 +44,14 @@ export const sessionCodec: AdapterSessionCodec = {
     const workspaceId = readNonEmptyString(params.workspaceId) ?? readNonEmptyString(params.workspace_id);
     const repoUrl = readNonEmptyString(params.repoUrl) ?? readNonEmptyString(params.repo_url);
     const repoRef = readNonEmptyString(params.repoRef) ?? readNonEmptyString(params.repo_ref);
+    const paperclipAiCredentialIdentity = readNonEmptyString(params.paperclipAiCredentialIdentity);
     return {
       sessionId,
       ...(cwd ? { cwd } : {}),
       ...(workspaceId ? { workspaceId } : {}),
       ...(repoUrl ? { repoUrl } : {}),
       ...(repoRef ? { repoRef } : {}),
+      ...(paperclipAiCredentialIdentity ? { paperclipAiCredentialIdentity } : {}),
     };
   },
   getDisplayId(params: Record<string, unknown> | null) {

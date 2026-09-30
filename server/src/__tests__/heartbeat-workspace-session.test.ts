@@ -3132,3 +3132,116 @@ describe("reconcileReusedExecutionWorkspaceProjectWorkspaceId", () => {
     ).toBe("resolved-workspace");
   });
 });
+
+describe("session resume with managed AI credentials", () => {
+  it("does not reset session when managed credential home path changes but connection is same", async () => {
+    const base = await buildSessionConfigMetadata({
+      effectiveAdapterConfig: {
+        command: "codex",
+        model: "gpt-5.4-mini",
+        env: {
+          OPENAI_API_KEY: "resolved-secret-value",
+          PLAIN_FLAG: "plain-value",
+          CODEX_HOME: "/tmp/paperclip-ai-company1-grant1-abc123/provider",
+          HOME: "/tmp/paperclip-ai-company1-grant1-abc123",
+          XDG_CONFIG_HOME: "/tmp/paperclip-ai-company1-grant1-abc123/config",
+          XDG_DATA_HOME: "/tmp/paperclip-ai-company1-grant1-abc123/data",
+        },
+        managedAiConnection: {
+          connectionId: "conn-1",
+          grantId: "grant-1",
+          provider: "openai",
+          method: "subscription",
+          mode: "responsible_user",
+          responsibleUserId: "user-1",
+          identity: "grant-1:user-1:a1b2c3d4e5f6", // old generation-based identity
+        },
+      },
+    });
+    const next = await buildSessionConfigMetadata({
+      effectiveAdapterConfig: {
+        command: "codex",
+        model: "gpt-5.4-mini",
+        env: {
+          OPENAI_API_KEY: "resolved-secret-value",
+          PLAIN_FLAG: "plain-value",
+          CODEX_HOME: "/tmp/paperclip-ai-company1-grant1-def456/provider",
+          HOME: "/tmp/paperclip-ai-company1-grant1-def456",
+          XDG_CONFIG_HOME: "/tmp/paperclip-ai-company1-grant1-def456/config",
+          XDG_DATA_HOME: "/tmp/paperclip-ai-company1-grant1-def456/data",
+        },
+        managedAiConnection: {
+          connectionId: "conn-1",
+          grantId: "grant-1",
+          provider: "openai",
+          method: "subscription",
+          mode: "responsible_user",
+          responsibleUserId: "user-1",
+          identity: "grant-1:user-1:newgenerationhash", // different generation after token refresh
+        },
+      },
+    });
+
+    const decision = resolveTaskSessionConfigFreshness({
+      hasTaskSession: true,
+      configuredModel: "gpt-5.4-mini",
+      taskSessionParams: sessionParamsWithConfigMetadata(base),
+      configMetadata: next,
+    });
+
+    expect(decision.reset).toBe(false);
+    expect(decision.reasons).toEqual([]);
+    expect(decision.changedCategories).toEqual([]);
+  });
+
+  it("resets session when managed connection changes", async () => {
+    const base = await buildSessionConfigMetadata({
+      effectiveAdapterConfig: {
+        command: "codex",
+        model: "gpt-5.4-mini",
+        env: {
+          OPENAI_API_KEY: "resolved-secret-value",
+          CODEX_HOME: "/tmp/paperclip-ai-company1-grant1-abc123/provider",
+        },
+        managedAiConnection: {
+          connectionId: "conn-1",
+          grantId: "grant-1",
+          provider: "openai",
+          method: "subscription",
+          mode: "responsible_user",
+          responsibleUserId: "user-1",
+          identity: "grant-1:user-1:a1b2c3d4e5f6",
+        },
+      },
+    });
+    const next = await buildSessionConfigMetadata({
+      effectiveAdapterConfig: {
+        command: "codex",
+        model: "gpt-5.4-mini",
+        env: {
+          OPENAI_API_KEY: "resolved-secret-value",
+          CODEX_HOME: "/tmp/paperclip-ai-company1-grant2-def456/provider",
+        },
+        managedAiConnection: {
+          connectionId: "conn-2",
+          grantId: "grant-2",
+          provider: "openai",
+          method: "subscription",
+          mode: "responsible_user",
+          responsibleUserId: "user-1",
+          identity: "grant-2:user-1:a1b2c3d4e5f6",
+        },
+      },
+    });
+
+    const decision = resolveTaskSessionConfigFreshness({
+      hasTaskSession: true,
+      configuredModel: "gpt-5.4-mini",
+      taskSessionParams: sessionParamsWithConfigMetadata(base),
+      configMetadata: next,
+    });
+
+    expect(decision.reset).toBe(true);
+    expect(decision.changedCategories).toContain("adapterConfig");
+  });
+});

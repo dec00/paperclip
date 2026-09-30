@@ -5732,6 +5732,7 @@ const PAPERCLIP_SESSION_METADATA_KEYS = new Set([
   SESSION_CONFIG_FINGERPRINT_VERSION_KEY,
   SESSION_CONFIG_CATEGORIES_KEY,
   SESSION_CONFIG_CATEGORY_FINGERPRINTS_KEY,
+  "paperclipAiCredentialIdentity",
 ]);
 const WORKSPACE_CONFIG_FINGERPRINT_METADATA_KEY = "configFingerprint";
 const EFFECTIVE_RUN_SESSION_CONFIG_CATEGORIES = [
@@ -5756,6 +5757,77 @@ const EFFECTIVE_RUN_WORKSPACE_CONFIG_CATEGORIES = [
   "environment",
   "realization",
 ] as const;
+
+/**
+ * Generates a stable session identity for a managed AI connection.
+ * This excludes the credential generation hash so token refreshes
+ * during a run don't break session continuity.
+ */
+function stableManagedCredentialIdentity(input: {
+  connectionId: string | null | undefined;
+  grantId: string | null | undefined;
+  provider: string | null | undefined;
+  method: string | null | undefined;
+  mode: string | null | undefined;
+  responsibleUserId: string | null | undefined;
+}): string {
+  return [
+    "managed-credential-home",
+    input.connectionId ?? "",
+    input.grantId ?? "",
+    input.provider ?? "",
+    input.method ?? "",
+    input.mode ?? "",
+    input.responsibleUserId ?? "shared",
+  ].join(":");
+}
+
+/**
+ * Normalizes a managed AI connection's effective adapter config for fingerprinting.
+ * Replaces per-run temporary home paths and credential generation identity
+ * with stable markers so session resume works across runs with the same connection.
+ */
+function normalizeManagedAdapterConfigForFingerprint(
+  config: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!config || typeof config !== "object") return config;
+  const managed = config.managedAiConnection;
+  if (!managed || typeof managed !== "object") return config;
+
+  // managedAiConnection contains the attribution fields directly (spread from selection.attribution)
+  // plus an identity field. No nested 'attribution' property.
+  const attribution = managed;
+
+  // Build stable identity from connection identity, not credential generation
+  const stableIdentity = stableManagedCredentialIdentity({
+    connectionId: attribution.connectionId,
+    grantId: attribution.grantId,
+    provider: attribution.provider,
+    method: attribution.method,
+    mode: attribution.mode,
+    responsibleUserId: attribution.responsibleUserId,
+  });
+
+  const next = { ...config };
+  // Replace the managed connection identity with stable marker
+  next.managedAiConnection = {
+    ...managed,
+    identity: stableIdentity,
+  };
+
+  // Replace temporary home paths in env with stable marker
+  if (next.env && typeof next.env === "object") {
+    const env = { ...(next.env as Record<string, unknown>) };
+    for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "CODEX_HOME", "GROK_HOME", "CLAUDE_CONFIG_DIR"]) {
+      if (typeof env[key] === "string" && env[key].includes("paperclip-ai-")) {
+        env[key] = stableIdentity;
+      }
+    }
+    next.env = env;
+  }
+
+  return next;
+}
 
 type EffectiveRunSessionConfigCategory =
   (typeof EFFECTIVE_RUN_SESSION_CONFIG_CATEGORIES)[number];
@@ -6413,12 +6485,18 @@ function buildSessionConfigCategoryValues(input: {
   // boundary; the reusable row and its evolving generation are state.
   delete workspaceConfig.existingExecutionWorkspace;
   delete workspaceConfig.reusableExecutionWorkspaceConfig;
+
+  // Normalize managed AI connection config for stable fingerprinting
+  const normalizedAdapterConfig = normalizeManagedAdapterConfigForFingerprint(
+    input.effectiveAdapterConfig,
+  );
+
   return {
     adapter: {
       adapterType: input.adapterType,
       agentConfigRevision: input.agentConfigRevision,
     },
-    adapterConfig: input.effectiveAdapterConfig,
+    adapterConfig: normalizedAdapterConfig,
     agentRuntimeConfig: input.agentRuntimeConfig,
     instructions: input.instructions,
     issueOverrides: input.issueOverrides,
@@ -20925,7 +21003,15 @@ export function heartbeatService(
         }
         Object.assign(resolvedConfig, managedAiRuntime.config);
         for (const key of AI_AUTH_ENV_KEYS) secretKeys.add(key);
-        context.aiConnection = { ...managedAiRuntime.attribution, identity: managedAiRuntime.identity };
+        const stableIdentity = stableManagedCredentialIdentity({
+          connectionId: managedAiRuntime.attribution?.connectionId ?? managedAiRuntime.connectionId,
+          grantId: managedAiRuntime.attribution?.grantId ?? managedAiRuntime.grantId,
+          provider: managedAiRuntime.attribution?.provider ?? managedAiRuntime.provider,
+          method: managedAiRuntime.attribution?.method ?? managedAiRuntime.method,
+          mode: managedAiRuntime.attribution?.mode ?? managedAiRuntime.mode,
+          responsibleUserId: managedAiRuntime.attribution?.responsibleUserId ?? managedAiRuntime.responsibleUserId,
+        });
+        context.aiConnection = { ...managedAiRuntime.attribution, identity: stableIdentity };
         await db.update(heartbeatRuns).set({ contextSnapshot: sql`coalesce(${heartbeatRuns.contextSnapshot}, '{}'::jsonb) || ${JSON.stringify({ aiConnection: context.aiConnection })}::jsonb` }).where(eq(heartbeatRuns.id, run.id));
       }
       if (secretManifest.length > 0) {
@@ -22223,8 +22309,17 @@ export function heartbeatService(
       }
 
       if (managedAiRuntime) {
-        sessionConfigMetadata.aiCredentialIdentity = managedAiRuntime.identity;
-        if (taskSessionDecodedParams?.paperclipAiCredentialIdentity !== managedAiRuntime.identity) {
+        // Use stable identity for session resume comparison
+        const stableIdentity = stableManagedCredentialIdentity({
+          connectionId: managedAiRuntime.attribution?.connectionId ?? managedAiRuntime.connectionId,
+          grantId: managedAiRuntime.attribution?.grantId ?? managedAiRuntime.grantId,
+          provider: managedAiRuntime.attribution?.provider ?? managedAiRuntime.provider,
+          method: managedAiRuntime.attribution?.method ?? managedAiRuntime.method,
+          mode: managedAiRuntime.attribution?.mode ?? managedAiRuntime.mode,
+          responsibleUserId: managedAiRuntime.attribution?.responsibleUserId ?? managedAiRuntime.responsibleUserId,
+        });
+        sessionConfigMetadata.aiCredentialIdentity = stableIdentity;
+        if (taskSessionDecodedParams?.paperclipAiCredentialIdentity !== stableIdentity) {
           runtimeSessionIdForAdapter = null;
           runtimeSessionParamsForAdapter = null;
           previousSessionDisplayId = null;
@@ -22734,7 +22829,15 @@ export function heartbeatService(
                     return requests.length > 0 ? requests : undefined;
                   })(),
                 });
-          const taskNativeSessionId = managedAiRuntime && taskSessionDecodedParams?.paperclipAiCredentialIdentity !== managedAiRuntime.identity ? null : readNonEmptyString(
+          const stableIdentity = managedAiRuntime ? stableManagedCredentialIdentity({
+          connectionId: managedAiRuntime.attribution?.connectionId ?? managedAiRuntime.connectionId,
+          grantId: managedAiRuntime.attribution?.grantId ?? managedAiRuntime.grantId,
+          provider: managedAiRuntime.attribution?.provider ?? managedAiRuntime.provider,
+          method: managedAiRuntime.attribution?.method ?? managedAiRuntime.method,
+          mode: managedAiRuntime.attribution?.mode ?? managedAiRuntime.mode,
+          responsibleUserId: managedAiRuntime.attribution?.responsibleUserId ?? managedAiRuntime.responsibleUserId,
+        }) : null;
+          const taskNativeSessionId = managedAiRuntime && taskSessionDecodedParams?.paperclipAiCredentialIdentity !== stableIdentity ? null : readNonEmptyString(
             taskSessionDecodedParams?.sessionId,
           );
           // Compatibility for native retry rows created before same-run restart
